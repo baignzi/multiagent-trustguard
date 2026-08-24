@@ -4,128 +4,163 @@
 
 本系统面向分布式多智能体协同场景，解决传统安全机制难以应对的隐蔽协同攻击、身份冒用与信任漂移问题。通过融合行为语义分析、图神经网络与可解释信任模型，构建具备自适应能力的防御闭环。
 
+当前仓库为**可运行的演示原型（v1）**：后端提供智能体注册/元数据管理与动态信任评估算法核心，前端提供组织树浏览、智能体注册与监控仪表盘。部分高级模块（见下文"实现状态"）尚在规划中。
+
 ## 技术栈
 
 ### 后端
-- **FastAPI**: 智能体注册与元数据管理服务（端口 8000）
-- **Flask**: 恶意行为实时检测中心服务（端口 5000）
-- **SQLAlchemy**: ORM框架，支持SQLite/MySQL
-- **Pydantic**: 数据验证
+- **FastAPI**：智能体注册与元数据管理服务（端口 8000）
+- **Flask**：恶意行为检测中心服务（端口 5000，当前为 Mock 接口）
+- **SQLAlchemy**：ORM 框架，持久化到 SQLite（演示）/ 可切换 MySQL
+- **Pydantic**：数据校验
+
+### 算法核心
+- **backend/trust_engine.py**：动态信任评估引擎（纯函数实现，已在 v1 落地）
 
 ### 前端
-- **React 18**: 组件化UI框架
-- **React Markdown**: Markdown渲染
-- **KaTeX**: 数学公式渲染
-- **ECharts**: 数据可视化（需单独引入）
+- **React 18** + Create React App（react-scripts）
+- **react-markdown / remark-math / rehype-katex / katex**：Markdown 与数学公式渲染
+- **http-proxy-middleware**：开发期将 `/api` 代理转发到后端（端口 8000）
+- **可视化**：原生 SVG 折线图（无第三方图表库，监控仪表盘由 SVG 直接绘制）
 
 ### 数据库
-- SQLite（开发环境）
-- MySQL 8.0（生产环境）
+- SQLite（开发演示，库文件 `agents.db` 已在 `.gitignore` 忽略，首次启动自动 seed 演示数据）
+- MySQL 8.0（生产环境规划）
 
 ## 项目结构
 
 ```
 project/
-├── backend/                    # 后端服务
-│   ├── agent_registry.py      # FastAPI智能体注册服务
-│   ├── detection_center.py    # Flask检测中心服务
-│   └── requirements.txt       # Python依赖
-├── frontend/                   # 前端应用
+├── backend/                        # 后端服务
+│   ├── agent_registry.py           # FastAPI 智能体注册与元数据服务（:8000）
+│   ├── trust_engine.py             # 动态信任评估引擎（算法核心，纯函数）
+│   ├── detection_center.py         # Flask 检测中心服务（:5000，Mock 接口）
+│   └── requirements.txt            # Python 依赖
+├── frontend/                       # 前端应用（React）
 │   ├── public/
-│   │   └── index.html         # HTML入口
+│   │   └── index.html              # HTML 入口
 │   ├── src/
 │   │   ├── components/
-│   │   │   └── DetectionCenter.js  # 检测中心组件
+│   │   │   └── DetectionCenter.js  # 检测中心组件（注：当前未挂载到 App.js）
 │   │   ├── styles/
-│   │   │   └── index.css      # 全局样式
-│   │   └── App.js             # 主应用组件
-│   └── package.json           # Node.js依赖
-└── README.md                  # 项目说明
+│   │   │   └── index.css           # 全局样式
+│   │   ├── App.js                  # 主应用（组织树/注册/监控仪表盘）
+│   │   ├── index.js                # React 入口
+│   │   └── setupProxy.js           # 开发期 /api 代理配置
+│   └── package.json                # Node.js 依赖
+├── start.sh                        # Linux/macOS 一键启动脚本
+├── start.bat                       # Windows 启动脚本
+└── README.md                       # 项目说明
 ```
 
 ## 快速开始
 
-### 1. 安装后端依赖
+### 方式一：一键启动（推荐）
 
+```bash
+# Linux / macOS
+./start.sh
+
+# Windows
+start.bat
+```
+
+> 说明：`start.bat` 中的 Python 解释器路径为本地绝对路径，使用前请改为你环境的实际路径。
+> `start.sh` 会依次安装后端依赖、前端依赖，并先后启动 Detection Center(:5000)、Agent Registry(:8000) 与前端(:3000)。
+
+### 方式二：分步启动
+
+**1. 安装后端依赖**
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
-### 2. 启动后端服务
+**2. 启动后端服务**
 
-**智能体注册服务**（终端1）:
+智能体注册服务（终端 1）：
 ```bash
+cd backend
 python agent_registry.py
+# 等价于：uvicorn agent_registry:app --host 0.0.0.0 --port 8000
 ```
-访问: http://localhost:8000/docs (Swagger UI)
+API 文档：http://localhost:8000/docs （Swagger UI）
 
-**检测中心服务**（终端2）:
+检测中心服务（终端 2，可选）：
 ```bash
+cd backend
 python detection_center.py
 ```
-访问: http://localhost:5000
+访问：http://localhost:5000
 
-### 3. 安装前端依赖
-
+**3. 安装并启动前端（终端 3）**
 ```bash
 cd frontend
 npm install
-```
-
-### 4. 启动前端开发服务器
-
-```bash
 npm start
 ```
-访问: http://localhost:3000
+访问：http://localhost:3000
 
-## 核心功能模块
+> 前端通过 `setupProxy.js` 将 `/api/*` 请求代理到 `http://localhost:8000`，因此需先启动后端再访问前端页面。
 
-### 1. 智能体注册与元数据管理
-- 智能体组织结构树展示
-- 智能体元数据查看与编辑
-- 新智能体注册流程
-- 信任评分演化追踪
+## 核心功能与实现状态
 
-### 2. 恶意行为实时检测中心
-- 行为流实时监控
-- 异常检测策略配置
-- 检测报告生成
-- 攻击链路溯源
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 智能体注册与元数据管理 | 已实现 | 组织树、注册流程、元数据查询（`/api/tree`、`/api/agent/register`、`/api/agent/{id}`） |
+| 动态信任评估引擎 | 已实现 | `backend/trust_engine.py`，基于行为证据的时间衰减 + 证据加权评分（详见下节） |
+| 元数据监控仪表盘 | 已实现 | 前端以原生 SVG 折线图渲染 `/api/chart/metadata-monitoring` |
+| 恶意行为检测中心（前端视图） | 部分实现 | 后端 Mock 接口完整（:5000），但前端 `DetectionCenter.js` 尚未挂载，暂无前端消费方 |
+| 跨智能体交互图谱 | 规划中 | 代码未实现，仅文档描述 |
+| 防御策略编排平台 | 规划中 | 代码未实现，仅文档描述 |
+| 全链路溯源看板 | 规划中 | 代码未实现，仅文档描述 |
 
-### 3. 动态信任评估引擎 (已实现，见 backend/trust_engine.py)
-- 时间衰减因子 + 证据权重融合的动态信任分（task 0.3 / message 0.4 / resource 0.3，decay=e^(-0.1*t)）
-- GNN 子图加权可解释性标签生成（degree-centrality / trust-propagation / cross-domain-consensus）
-- 真实行为证据驱动，接口：`/api/trust/score/{id}`、`/api/trust/explain/{id}`、`/api/agent/{id}`
+## 动态信任评估引擎（已实现）
 
-### 4. 跨智能体交互图谱
-- 关系拓扑可视化
-- 路径可信度推演
-- 协同攻击识别
+核心算法位于 `backend/trust_engine.py`，为不依赖 Web 框架的纯函数模块，便于测试与复用。
 
-### 5. 防御策略编排平台
-- 策略模板库管理
-- 策略参数动态调整
-- 策略有效性评估
+### 信任评分公式
 
-### 6. 全链路溯源看板
-- 事件回溯轨迹
-- 证据链验证
-- 合规报告生成
+对智能体近期行为证据按类型加权融合，并施加时间衰减：
 
-## API接口说明
+```
+trust_score = Σ ( w_i × evidence_i ) × decay_factor(Δt)
+decay_factor(Δt) = e^(-λ·Δt)        // λ = 0.1
+```
 
-### 智能体注册服务 (FastAPI - 端口8000)
+- 证据权重：`task = 0.3`、`message = 0.4`、`resource = 0.3`
+- 行为证据来自 `BehaviorRecord` 表（启动时 seed 演示数据），包含行为类型、得分、时间戳与异常标记
+- 时间衰减保证越早的行为对当前信任分影响越小
+
+### 可解释性（GNN 特征）
+
+`generate_gnn_explanation()` 基于图特征（节点度、中心性、跨域共识）实时计算子图得分，并产出标签：
+
+- `GNN-degree-centrality` / `trust-propagation-path` / `cross-domain-consensus`
+- 检测到行为漂移时追加 `behavior-drift-detected`
+
+### 对外接口
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/api/tree` | GET | 获取智能体组织结构树 |
-| `/api/agent/{agent_id}` | GET | 获取智能体详细信息 |
-| `/api/agent/register` | POST | 注册新智能体 |
-| `/api/chart/metadata-monitoring` | GET | 获取元数据监控图表数据 |
+| `/api/trust/score/{agent_id}` | GET | 返回实时计算的信任分 + 三类证据融合明细 |
+| `/api/trust/explain/{agent_id}` | GET | 返回 GNN 子图解释得分与标签 |
+| `/api/agent/{agent_id}` | GET | 智能体详情，含真实信任分、7 日演化、解释标签（由引擎驱动） |
 
-### 检测中心服务 (Flask - 端口5000)
+## API 接口说明
+
+### 智能体注册服务（FastAPI - 端口 8000）
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/tree` | GET | 获取智能体组织结构树（含注册后写入数据库的自定义智能体） |
+| `/api/agent/{agent_id}` | GET | 获取智能体详细信息（信任分/演化/解释，由引擎实时计算） |
+| `/api/agent/register` | POST | 注册新智能体 |
+| `/api/trust/score/{agent_id}` | GET | 动态信任评分（算法核心接口） |
+| `/api/trust/explain/{agent_id}` | GET | GNN 可解释性标签与子图得分 |
+| `/api/chart/metadata-monitoring` | GET | 获取元数据监控图表数据（4 条折线） |
+
+### 检测中心服务（Flask - 端口 5000，当前为 Mock）
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
@@ -133,54 +168,7 @@ npm start
 | `/api/v1/right-tree` | GET | 获取右侧风险实体树 |
 | `/api/v1/behavior-table` | GET | 获取行为流表格数据 |
 | `/api/v1/detection-form-schema` | GET | 获取检测表单配置 |
-| `/api/v1/markdown-report` | GET | 获取Markdown检测报告 |
+| `/api/v1/markdown-report` | GET | 获取 Markdown 检测报告 |
 | `/api/v1/chart/abnormal-trend` | GET | 获取异常趋势图表 |
 | `/api/v1/chart/agent-deep-analysis` | GET | 获取智能体深度分析图表 |
 | `/api/v1/calendar-events` | GET | 获取日历事件数据 |
-
-## 系统架构
-
-```
-                        ┌─────────────────┐
-用户请求 ──────────────→ │   API Gateway    │
-                        │  鉴权/限流/路由   │
-                        └────────┬────────┘
-                                 |
-               ┌─────────────────┼─────────────────┐
-               v                 v                 v
-        ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-        │ Agent Registry│  │Detection Center│  │ Trust Engine │
-        │  (FastAPI)    │  │   (Flask)     │  │  (Python)    │
-        └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-               |                |                 |
-        ┌──────▼──────────────────────────────────▼──────┐
-        │              数据层                              │
-        │  SQLite/MySQL（持久化）  Redis（缓存）            │
-        └─────────────────────────────────────────────────┘
-```
-
-## 关键技术特点
-
-1. **行为语义分析**: 提取智能体交互意图特征
-2. **图神经网络(GNN)**: 建模多主体动态关联拓扑
-3. **可解释信任模型**: 生成量化可信度评分及证据链
-4. **全链路溯源**: 支持时间轴回放与原始日志关联
-5. **国密SM4加密**: 审计日志加密存储
-
-## 注意事项
-
-1. 首次运行前请确保已安装所有依赖
-2. 生产环境建议使用MySQL替代SQLite
-3. ECharts图表需要额外引入echarts库
-4. 静态资源文件（图标、图片）需放置在对应目录
-
-## 开发环境要求
-
-- Python 3.8+
-- Node.js 16+
-- npm 或 yarn
-- Git
-
-## 许可证
-
-内部项目，仅供授权使用。
