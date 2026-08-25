@@ -54,6 +54,21 @@ class BehaviorRecord(Base):
     ts = Column(DateTime, default=datetime.utcnow)
 
 
+class Policy(Base):
+    """防御策略模型（策略编排平台）"""
+    __tablename__ = "policies"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    rule_type = Column(String, nullable=False)       # threshold / rate_limit / anomaly_detect
+    params = Column(JSON, default=dict)              # 策略参数
+    enabled = Column(Integer, default=1)             # 1=启用 0=禁用
+    priority = Column(Integer, default=0)            # 优先级，数字越大越优先
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # 初始化数据库
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 Base.metadata.create_all(bind=engine)
@@ -118,9 +133,46 @@ def seed_demo_data():
                         anomaly=1 if (spec["anomaly"] >= 2 and rnd.random() < 0.4) else 0,
                         ts=day + timedelta(hours=rnd.randint(0, 23), minutes=rnd.randint(0, 59)),
                     ))
+        _seed_policies(db)
         db.commit()
     finally:
         db.close()
+
+
+def _seed_policies(db: Session):
+    """初始化默认防御策略。"""
+    if db.query(Policy).first():
+        return
+    defaults = [
+        Policy(
+            id="pol_baseline_threshold",
+            name="基线信任阈值",
+            description="信任分低于 60 分触发告警并建议人工复核",
+            rule_type="threshold",
+            params={"threshold": 60, "action": "alert"},
+            enabled=1,
+            priority=100,
+        ),
+        Policy(
+            id="pol_rate_limit",
+            name="异常行为限速",
+            description="5 分钟内异常行为超过 3 次则临时隔离该智能体",
+            rule_type="rate_limit",
+            params={"window_minutes": 5, "max_anomalies": 3, "action": "quarantine"},
+            enabled=1,
+            priority=90,
+        ),
+        Policy(
+            id="pol_anomaly_detect",
+            name="行为突变检测",
+            description="检测任务/消息/资源三类行为得分的突变",
+            rule_type="anomaly_detect",
+            params={"sensitivity": 0.8, "min_drop": 0.2},
+            enabled=1,
+            priority=80,
+        ),
+    ]
+    db.add_all(defaults)
 
 
 def get_db():
@@ -138,6 +190,13 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     seed_demo_data()
+    # 确保策略表存在默认数据（兼容已有数据库升级场景）
+    db = SessionLocal()
+    try:
+        _seed_policies(db)
+        db.commit()
+    finally:
+        db.close()
     yield
 
 
@@ -176,6 +235,26 @@ class AgentDetailResponse(BaseModel):
     trust_evolution: List[Dict[str, Any]]
     explanation_tags: List[str]
     gnn_explanation: str
+
+
+class PolicyItem(BaseModel):
+    """防御策略项"""
+    id: str
+    name: str
+    description: str
+    rule_type: str
+    params: Dict[str, Any]
+    enabled: int
+    priority: int
+
+
+class PolicyCreateRequest(BaseModel):
+    """创建策略请求"""
+    name: str
+    description: str
+    rule_type: str
+    params: Dict[str, Any]
+    priority: int
 
 
 @app.get("/api/tree", response_model=List[AgentTreeItem])
@@ -370,6 +449,237 @@ def get_metadata_monitoring_chart():
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "cross"}},
         "legend": {"top": "bottom", "data": ["信任度评分", "异常行为检测", "元数据完整性", "节点活跃度"]},
         "grid": {"left": "3%", "right": "4%", "bottom": "15%", "containLabel": True}
+    }
+
+
+# -----------------------------------------------------------------------------
+# 跨智能体交互图谱
+# -----------------------------------------------------------------------------
+
+@app.get("/api/graph/interaction")
+def get_interaction_graph(db: Session = Depends(get_db)):
+    """
+    获取跨智能体交互图谱。
+
+    节点来自 AgentMetadata；边基于共同通信上下文与 node_topology_relations 构建，
+    并标记涉及异常节点的可疑连边。
+    """
+    agents = db.query(AgentMetadata).all()
+    agent_ids = {ag.agent_id for ag in agents}
+
+    nodes = []
+    for ag in agents:
+        nodes.append({
+            "id": ag.agent_id,
+            "type": ag.agent_type,
+            "trust_score": ag.trust_score,
+            "anomaly": ag.anomaly_behavior_flag or 0,
+            "degree": (ag.gnn_features or {}).get("degree", 0),
+        })
+
+    links = []
+
+    # 1. 共同通信上下文 => 弱连接
+    context_groups: Dict[str, List[str]] = {}
+    for ag in agents:
+        ctx = ag.communication_context or "default"
+        context_groups.setdefault(ctx, []).append(ag.agent_id)
+    for ctx, ids in context_groups.items():
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                links.append({
+                    "source": ids[i],
+                    "target": ids[j],
+                    "relation": "same-context",
+                    "context": ctx,
+                    "weight": 0.25,
+                })
+
+    # 2. 拓扑关系 => 强连接
+    for ag in agents:
+        topo = ag.node_topology_relations or ""
+        if "->" in topo:
+            parts = [p.strip() for p in topo.split("->")]
+            for target in parts[1:]:
+                target_id = target.split("-")[0].strip()
+                if target_id in agent_ids and target_id != ag.agent_id:
+                    links.append({
+                        "source": ag.agent_id,
+                        "target": target_id,
+                        "relation": "topology",
+                        "weight": 0.75,
+                    })
+
+    # 去重边
+    seen = set()
+    unique_links = []
+    for link in links:
+        key = tuple(sorted([link["source"], link["target"], link["relation"]]))
+        if key not in seen:
+            seen.add(key)
+            unique_links.append(link)
+    links = unique_links
+
+    # 节点影响力（简化 PageRank：基于入度归一化）
+    node_scores = {n["id"]: {"in_degree": 0, "out_degree": 0, "influence": 0.0} for n in nodes}
+    for link in links:
+        node_scores[link["source"]]["out_degree"] += 1
+        node_scores[link["target"]]["in_degree"] += 1
+    max_in = max((v["in_degree"] for v in node_scores.values()), default=1) or 1
+    for nid, v in node_scores.items():
+        v["influence"] = round(0.25 + 0.75 * v["in_degree"] / max_in, 3)
+
+    # 可疑连边：连接异常节点或低信任分节点
+    anomaly_ids = {n["id"] for n in nodes if n["anomaly"] > 0}
+    suspicious = []
+    for link in links:
+        src = link["source"]
+        tgt = link["target"]
+        if src in anomaly_ids or tgt in anomaly_ids:
+            suspicious.append({
+                "source": src,
+                "target": tgt,
+                "relation": link["relation"],
+                "reason": "connects-to-anomaly",
+            })
+
+    return {
+        "nodes": nodes,
+        "links": links,
+        "node_scores": node_scores,
+        "suspicious_edges": suspicious,
+        "summary": {
+            "node_count": len(nodes),
+            "edge_count": len(links),
+            "anomaly_count": len(anomaly_ids),
+            "suspicious_edge_count": len(suspicious),
+        },
+    }
+
+
+# -----------------------------------------------------------------------------
+# 防御策略编排平台
+# -----------------------------------------------------------------------------
+
+@app.get("/api/policies", response_model=List[PolicyItem])
+def list_policies(db: Session = Depends(get_db)):
+    """列出所有防御策略。"""
+    return [
+        PolicyItem(**{k: getattr(p, k) for k in PolicyItem.model_fields})
+        for p in db.query(Policy).order_by(Policy.priority.desc()).all()
+    ]
+
+
+@app.post("/api/policies", response_model=PolicyItem)
+def create_policy(req: PolicyCreateRequest, db: Session = Depends(get_db)):
+    """创建新策略。"""
+    pid = f"pol_{int(datetime.utcnow().timestamp())}_{random.randint(1000, 9999)}"
+    p = Policy(
+        id=pid,
+        name=req.name,
+        description=req.description,
+        rule_type=req.rule_type,
+        params=req.params,
+        enabled=1,
+        priority=req.priority,
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return PolicyItem(**{k: getattr(p, k) for k in PolicyItem.model_fields})
+
+
+@app.patch("/api/policies/{policy_id}", response_model=PolicyItem)
+def update_policy(policy_id: str, body: Dict[str, Any], db: Session = Depends(get_db)):
+    """更新策略（启用/禁用、参数、优先级）。"""
+    p = db.query(Policy).filter(Policy.id == policy_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    if "enabled" in body:
+        p.enabled = 1 if body["enabled"] else 0
+    if "params" in body:
+        p.params = body["params"]
+    if "priority" in body:
+        p.priority = body["priority"]
+    db.commit()
+    db.refresh(p)
+    return PolicyItem(**{k: getattr(p, k) for k in PolicyItem.model_fields})
+
+
+@app.delete("/api/policies/{policy_id}")
+def delete_policy(policy_id: str, db: Session = Depends(get_db)):
+    """删除策略。"""
+    p = db.query(Policy).filter(Policy.id == policy_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    db.delete(p)
+    db.commit()
+    return {"status": "ok"}
+
+
+# -----------------------------------------------------------------------------
+# 全链路溯源看板
+# -----------------------------------------------------------------------------
+
+@app.get("/api/audit/trace/{agent_id}")
+def get_audit_trace(agent_id: str, db: Session = Depends(get_db)):
+    """
+    获取指定智能体的全链路审计时间线。
+
+    时间线包括：注册事件、行为证据事件、信任评估事件。
+    """
+    agent = db.query(AgentMetadata).filter(AgentMetadata.agent_id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    behaviors = (
+        db.query(BehaviorRecord)
+        .filter(BehaviorRecord.agent_id == agent_id)
+        .order_by(BehaviorRecord.ts)
+        .all()
+    )
+
+    events = [
+        {
+            "ts": agent.created_at.isoformat(),
+            "type": "register",
+            "level": "INFO",
+            "message": f"智能体 {agent_id} 注册成功，初始信任分 {agent.trust_score}",
+            "score": None,
+            "anomaly": 0,
+        }
+    ]
+
+    for b in behaviors:
+        events.append({
+            "ts": b.ts.isoformat(),
+            "type": b.behavior_type,
+            "level": "WARNING" if b.anomaly else "INFO",
+            "message": f"{b.behavior_type} 行为得分 {b.score}" + ("，触发异常标记" if b.anomaly else ""),
+            "score": b.score,
+            "anomaly": b.anomaly,
+        })
+
+    trust_score = trust_engine.calculate_trust_score(
+        [{"type": b.behavior_type, "score": b.score, "ts": b.ts, "anomaly": b.anomaly} for b in behaviors],
+        last_update=agent.updated_at,
+    )
+    if trust_score is not None:
+        events.append({
+            "ts": agent.updated_at.isoformat(),
+            "type": "trust-evaluation",
+            "level": "WARNING" if trust_score < 70 else "INFO",
+            "message": f"动态信任评估完成，当前信任分 {trust_score}",
+            "score": trust_score,
+            "anomaly": 0,
+        })
+
+    events.sort(key=lambda x: x["ts"])
+    return {
+        "agent_id": agent_id,
+        "event_count": len(events),
+        "anomaly_count": sum(1 for e in events if e["anomaly"]),
+        "events": events,
     }
 
 
