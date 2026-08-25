@@ -235,6 +235,7 @@ class AgentDetailResponse(BaseModel):
     trust_evolution: List[Dict[str, Any]]
     explanation_tags: List[str]
     gnn_explanation: str
+    gnn_subgraph_scores: Dict[str, float]
 
 
 class PolicyItem(BaseModel):
@@ -341,6 +342,7 @@ def get_agent_detail(agent_id: str, db: Session = Depends(get_db)):
         trust_evolution=trust_evolution,
         explanation_tags=gnn["tags"],
         gnn_explanation=gnn["explanation"],
+        gnn_subgraph_scores=gnn["subgraph_scores"],
     )
 
 

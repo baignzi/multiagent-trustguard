@@ -2,9 +2,6 @@ import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeKatex from 'rehype-katex';
-import remarkMath from 'remark-math';
-import 'katex/dist/katex.min.css';
 import './styles/index.css';
 import DetectionCenter from './components/DetectionCenter';
 
@@ -52,6 +49,8 @@ const App = () => {
   const [graphData, setGraphData] = useState(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState(null);
+  const [selectedGraphNode, setSelectedGraphNode] = useState(null);
+  const [graphTooltip, setGraphTooltip] = useState(null);
 
   // 策略编排
   const [policies, setPolicies] = useState([]);
@@ -481,16 +480,45 @@ ${agentDetail.trust_evolution.map(d => `| ${d.date} | ${d.score} | ${d.anomalies
 
 ### 可解释性依据标签
 - ${agentDetail.explanation_tags.join('\n- ')}
-
-### 图神经网络说明
-\`\`\`python
-# 信任传播路径权重计算
-score = sum([w * gnn_subgraph_score(sub) for w, sub in zip(weights, subgraphs)])
-\`\`\`
-${agentDetail.gnn_explanation}
 `;
 
-    return <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{mdContent}</Markdown>;
+    const scores = agentDetail.gnn_subgraph_scores || {};
+    const scoreItems = [
+      { key: 'degree_centrality', label: '度中心性 (Degree Centrality)', desc: '节点在拓扑中的连接密集程度' },
+      { key: 'trust_propagation', label: '信任传播强度 (Trust Propagation)', desc: '跨节点信任沿边的传播强度' },
+      { key: 'cross_domain_consensus', label: '跨域共识度 (Cross-domain Consensus)', desc: '不同子域间对该智能体行为的一致认可程度' },
+    ];
+
+    return (
+      <div className="markdown-content">
+        <Markdown remarkPlugins={[remarkGfm]}>{mdContent}</Markdown>
+        <div className="gnn-card">
+          <h3>图神经网络说明</h3>
+          <p className="gnn-formula">
+            综合信任分 = <code>Σ w<sub>i</sub> · subgraph_score<sub>i</sub></code>
+            <span className="gnn-formula-note">（基于 GraphSAGE 在 3 个关键子图上聚合）</span>
+          </p>
+          <div className="gnn-scores">
+            {scoreItems.map(item => {
+              const value = Math.max(0, Math.min(1, scores[item.key] || 0));
+              return (
+                <div className="gnn-score-row" key={item.key}>
+                  <div className="gnn-score-label">
+                    <span>{item.label}</span>
+                    <span className="gnn-score-value">{(value * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="gnn-score-bar">
+                    <div className="gnn-score-fill" style={{ width: `${value * 100}%` }} />
+                  </div>
+                  <div className="gnn-score-desc">{item.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="gnn-explanation">{agentDetail.gnn_explanation}</p>
+        </div>
+      </div>
+    );
   };
 
   // ---------------- 交互图谱视图 ----------------
@@ -520,56 +548,220 @@ ${agentDetail.gnn_explanation}
       suspiciousSet.add(`${e.target}-${e.source}`);
     });
 
+    // 邻居关系：用于高亮和详情面板
+    const neighbors = {};
+    graphData.nodes.forEach(node => { neighbors[node.id] = new Set(); });
+    graphData.links.forEach(link => {
+      neighbors[link.source].add(link.target);
+      neighbors[link.target].add(link.source);
+    });
+
+    const selectedId = selectedGraphNode ? selectedGraphNode.id : null;
+    const selectedNeighbors = selectedId ? neighbors[selectedId] : null;
+
+    const handleNodeEnter = (e, node) => {
+      const score = graphData.node_scores && graphData.node_scores[node.id];
+      setGraphTooltip({
+        x: e.clientX + 12,
+        y: e.clientY - 12,
+        content: (
+          <div>
+            <strong>{node.id}</strong>
+            <div>类型：{node.type || '-'}</div>
+            <div>信任分：{typeof node.trust_score === 'number' ? node.trust_score.toFixed(1) : node.trust_score}</div>
+            <div>度数：{node.degree}</div>
+            {score && <div>影响力：{score.influence}</div>}
+            {node.anomaly > 0 && <div className="tt-alert">异常标记：{node.anomaly}</div>}
+          </div>
+        )
+      });
+    };
+    const handleNodeMove = (e) => {
+      setGraphTooltip(t => t ? { ...t, x: e.clientX + 12, y: e.clientY - 12 } : null);
+    };
+    const handleNodeLeave = () => setGraphTooltip(null);
+
+    const handleEdgeEnter = (e, link) => {
+      setGraphTooltip({
+        x: e.clientX + 12,
+        y: e.clientY - 12,
+        content: (
+          <div>
+            <div><strong>{link.source}</strong> → <strong>{link.target}</strong></div>
+            <div>关系：{link.relation || 'interaction'}</div>
+            {link.context && <div>上下文：{link.context}</div>}
+            {typeof link.weight === 'number' && <div>权重：{link.weight.toFixed(2)}</div>}
+          </div>
+        )
+      });
+    };
+    const handleEdgeMove = (e) => {
+      setGraphTooltip(t => t ? { ...t, x: e.clientX + 12, y: e.clientY - 12 } : null);
+    };
+    const handleEdgeLeave = () => setGraphTooltip(null);
+
+    // 选中节点详情
+    const renderNodeDetail = () => {
+      if (!selectedGraphNode) return null;
+      const node = selectedGraphNode;
+      const score = graphData.node_scores && graphData.node_scores[node.id];
+      const nodeLinks = graphData.links.filter(l => l.source === node.id || l.target === node.id);
+      const suspiciousLinks = nodeLinks.filter(l => suspiciousSet.has(`${l.source}-${l.target}`));
+      return (
+        <div className="graph-detail-panel">
+          <div className="graph-detail-head">
+            <h4>节点详情：{node.id}</h4>
+            <button className="graph-detail-close" onClick={() => setSelectedGraphNode(null)}>×</button>
+          </div>
+          <div className="graph-detail-body">
+            <p><strong>类型：</strong>{node.type || '-'}</p>
+            <p><strong>信任分：</strong>{typeof node.trust_score === 'number' ? node.trust_score.toFixed(1) : node.trust_score}</p>
+            <p><strong>异常标记：</strong>{node.anomaly > 0 ? `异常等级 ${node.anomaly}` : '正常'}</p>
+            <p><strong>度数：</strong>{node.degree}</p>
+            {score && (
+              <>
+                <p><strong>入度：</strong>{score.in_degree} / 出度：{score.out_degree}</p>
+                <p><strong>影响力：</strong>{score.influence}</p>
+              </>
+            )}
+            <p><strong>邻居节点：</strong>{Array.from(neighbors[node.id] || []).join('、') || '-'}</p>
+            <p><strong>关联边数：</strong>{nodeLinks.length}</p>
+            {suspiciousLinks.length > 0 && (
+              <div className="graph-detail-suspicious">
+                <strong>可疑连边（{suspiciousLinks.length}）：</strong>
+                <ul>
+                  {suspiciousLinks.map((l, i) => (
+                    <li key={i}>{l.source} ↔ {l.target}（{l.relation || 'interaction'}）</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
     return (
       <div className="graph-view">
-        <h2>跨智能体交互图谱</h2>
+        <div className="graph-view-head">
+          <h2>跨智能体交互图谱</h2>
+          {selectedGraphNode && (
+            <button className="graph-reset-btn" onClick={() => setSelectedGraphNode(null)}>
+              取消高亮
+            </button>
+          )}
+        </div>
         <div className="graph-summary">
           节点：{graphData.summary.node_count} &nbsp;|&nbsp;
           边：{graphData.summary.edge_count} &nbsp;|&nbsp;
           异常节点：{graphData.summary.anomaly_count} &nbsp;|&nbsp;
           可疑连边：{graphData.summary.suspicious_edge_count}
+          {selectedGraphNode && (
+            <span className="graph-selected-hint">
+              &nbsp;|&nbsp;已选中：{selectedGraphNode.id}，点击空白处或「取消高亮」可恢复
+            </span>
+          )}
         </div>
-        <svg viewBox={`0 0 ${W} ${H}`} className="graph-svg">
-          {/* 边 */}
-          {graphData.links.map((link, idx) => {
-            const s = coords[link.source];
-            const t = coords[link.target];
-            if (!s || !t) return null;
-            const isSuspicious = suspiciousSet.has(`${link.source}-${link.target}`);
-            return (
-              <line
-                key={`edge-${idx}`}
-                x1={s.x} y1={s.y} x2={t.x} y2={t.y}
-                stroke={isSuspicious ? '#f5222d' : '#bfbfbf'}
-                strokeWidth={isSuspicious ? 2 : 1}
-                strokeDasharray={isSuspicious ? '5,3' : ''}
-              />
-            );
-          })}
-          {/* 节点 */}
-          {graphData.nodes.map((node) => {
-            const pos = coords[node.id];
-            const isAnomaly = node.anomaly > 0;
-            const r = Math.max(6, Math.min(16, 6 + node.degree / 3));
-            return (
-              <g key={`node-${node.id}`}>
-                <circle
-                  cx={pos.x} cy={pos.y} r={r}
-                  fill={isAnomaly ? '#f5222d' : '#1a73e8'}
-                  stroke="#fff" strokeWidth="2"
+
+        <div className="graph-wrap">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            className="graph-svg"
+            onClick={() => setSelectedGraphNode(null)}
+          >
+            {/* 边 */}
+            {graphData.links.map((link, idx) => {
+              const s = coords[link.source];
+              const t = coords[link.target];
+              if (!s || !t) return null;
+              const isSuspicious = suspiciousSet.has(`${link.source}-${link.target}`);
+              const isConnected = selectedId && (link.source === selectedId || link.target === selectedId);
+              const isDimmed = selectedId && !isConnected;
+              return (
+                <line
+                  key={`edge-${idx}`}
+                  x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                  stroke={isSuspicious ? '#f5222d' : '#bfbfbf'}
+                  strokeWidth={isSuspicious ? 2.5 : 1}
+                  strokeDasharray={isSuspicious ? '5,3' : ''}
+                  opacity={isDimmed ? 0.15 : isConnected ? 1 : 0.55}
+                  className="graph-edge"
+                  onMouseEnter={(e) => handleEdgeEnter(e, link)}
+                  onMouseMove={handleEdgeMove}
+                  onMouseLeave={handleEdgeLeave}
+                  onClick={(e) => e.stopPropagation()}
                 />
-                <text x={pos.x} y={pos.y + r + 14} textAnchor="middle" fontSize="11" fill="#333">
-                  {node.id}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
+              );
+            })}
+            {/* 节点 */}
+            {graphData.nodes.map((node) => {
+              const pos = coords[node.id];
+              const isAnomaly = node.anomaly > 0;
+              const r = Math.max(6, Math.min(16, 6 + node.degree / 3));
+              const isSelected = selectedId === node.id;
+              const isNeighbor = selectedNeighbors && selectedNeighbors.has(node.id);
+              const isDimmed = selectedId && !isSelected && !isNeighbor;
+              return (
+                <g
+                  key={`node-${node.id}`}
+                  className="graph-node"
+                  onMouseEnter={(e) => handleNodeEnter(e, node)}
+                  onMouseMove={handleNodeMove}
+                  onMouseLeave={handleNodeLeave}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedGraphNode(node);
+                  }}
+                >
+                  <circle
+                    cx={pos.x} cy={pos.y} r={r}
+                    fill={isAnomaly ? '#f5222d' : '#1a73e8'}
+                    stroke={isSelected ? '#333' : '#fff'}
+                    strokeWidth={isSelected ? 3 : 2}
+                    opacity={isDimmed ? 0.2 : 1}
+                    style={{ cursor: 'pointer', transition: 'all 0.2s' }}
+                  />
+                  {isSelected && (
+                    <circle
+                      cx={pos.x} cy={pos.y} r={r + 5}
+                      fill="none"
+                      stroke="#f5222d"
+                      strokeWidth="2"
+                      strokeDasharray="3,2"
+                    />
+                  )}
+                  <text
+                    x={pos.x}
+                    y={pos.y + r + 14}
+                    textAnchor="middle"
+                    fontSize="11"
+                    fill={isDimmed ? '#999' : '#333'}
+                    opacity={isDimmed ? 0.35 : 1}
+                  >
+                    {node.id}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+          {renderNodeDetail()}
+        </div>
+
+        {graphTooltip && (
+          <div
+            className="graph-tooltip"
+            style={{ left: graphTooltip.x, top: graphTooltip.y }}
+          >
+            {graphTooltip.content}
+          </div>
+        )}
+
         <div className="graph-legend">
           <span><i className="dot blue" /> 正常节点</span>
           <span><i className="dot red" /> 异常节点</span>
           <span><i className="line gray" /> 普通连边</span>
           <span><i className="line red dashed" /> 可疑连边</span>
+          <span><i className="ring red" /> 选中节点</span>
         </div>
       </div>
     );
@@ -760,10 +952,7 @@ ${agentDetail.gnn_explanation}
 
             <div className="panel right-panel">
               {activeTab === 'metadata' && (
-                <>
-                  <h2>智能体元数据详情</h2>
-                  <div className="markdown-content">{renderMarkdownContent()}</div>
-                </>
+                <div className="markdown-content">{renderMarkdownContent()}</div>
               )}
               {activeTab === 'graph' && renderGraphView()}
               {activeTab === 'policies' && renderPoliciesView()}

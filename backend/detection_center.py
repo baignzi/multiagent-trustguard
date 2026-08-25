@@ -30,14 +30,74 @@ def fetch_left_tree_data():
                     {
                         "id": "node-02",
                         "name": "风控策略Agent",
-                        "button": {"text": "查看规则", "icon": "/static/icons/rule.svg"}
+                        "button": {"text": "查看规则", "icon": "/static/icons/rule.svg"},
+                        "detail": {
+                            "title": "风控策略Agent 检测规则",
+                            "type": "rule",
+                            "summary": "当前节点共绑定 4 条实时检测规则，覆盖身份一致性、行为速率、信任阈值与图异常传播。",
+                            "items": [
+                                {
+                                    "rule_id": "R-101",
+                                    "rule_name": "身份令牌复用检测",
+                                    "description": "同一身份令牌在 60 秒内被超过 2 个不同智能体使用，判定为冒用。",
+                                    "threshold": "token_reuse_count >= 2 / 60s",
+                                    "action": "告警 + 重认证",
+                                    "status": "enabled",
+                                    "hits": 12
+                                },
+                                {
+                                    "rule_id": "R-102",
+                                    "rule_name": "异常行为速率限制",
+                                    "description": "单个智能体在 5 分钟内 state_sync 调用次数超过基线 2 次/分钟。",
+                                    "threshold": "state_sync > 10 / 5min",
+                                    "action": "限流",
+                                    "status": "enabled",
+                                    "hits": 5
+                                },
+                                {
+                                    "rule_id": "R-103",
+                                    "rule_name": "跨域信任衰减阈值",
+                                    "description": "跨集群调用后信任分在 3 跳内衰减至 0.5 以下。",
+                                    "threshold": "trust_decay_3hop < 0.5",
+                                    "action": "隔离",
+                                    "status": "enabled",
+                                    "hits": 3
+                                },
+                                {
+                                    "rule_id": "R-104",
+                                    "rule_name": "图神经网络异常传播",
+                                    "description": "GNN 子图异常概率超过 0.9，且 SHAP 归因指向 token_validity。",
+                                    "threshold": "gnn_anomaly_prob > 0.9",
+                                    "action": "人工复核",
+                                    "status": "enabled",
+                                    "hits": 1
+                                }
+                            ]
+                        }
                     }
                 ]
             },
             {
                 "id": "cluster-02",
                 "name": "工业边缘集群",
-                "button": {"text": "下钻拓扑", "icon": "/static/icons/topo.svg"}
+                "button": {"text": "下钻拓扑", "icon": "/static/icons/topo.svg"},
+                "detail": {
+                    "title": "工业边缘集群子拓扑",
+                    "type": "topology",
+                    "summary": "工业边缘集群包含 3 层架构：传感器采集 → 边缘预处理 → 云端决策。当前检测到 1 条异常数据流。",
+                    "nodes": [
+                        {"id": "sensor-collector", "name": "传感器采集", "layer": "边缘层"},
+                        {"id": "edge-processor", "name": "边缘预处理", "layer": "边缘层"},
+                        {"id": "ml-inference", "name": "推理决策", "layer": "云端层"},
+                        {"id": "auditor", "name": "审计节点", "layer": "控制层"}
+                    ],
+                    "edges": [
+                        {"source": "sensor-collector", "target": "edge-processor", "status": "normal"},
+                        {"source": "edge-processor", "target": "ml-inference", "status": "normal"},
+                        {"source": "edge-processor", "target": "auditor", "status": "anomaly"},
+                        {"source": "ml-inference", "target": "auditor", "status": "normal"}
+                    ]
+                }
             },
             {
                 "id": "cluster-03",
@@ -66,7 +126,25 @@ def fetch_right_tree_data():
                     {
                         "id": "path-01",
                         "name": "金融→工业链路",
-                        "button": {"text": "溯源", "icon": "/static/icons/trace.svg"}
+                        "button": {"text": "溯源", "icon": "/static/icons/trace.svg"},
+                        "detail": {
+                            "title": "金融→工业链路攻击溯源",
+                            "type": "trace",
+                            "summary": "该链路还原了一次跨域协同攻击：金融集群的异常 token 被冒用后，通过边缘网关渗透至工业集群。",
+                            "path": [
+                                {"step": 1, "node": "支付网关Agent", "time": "2026-08-25 10:12:33", "event": "异常 auth 请求，token 复用"},
+                                {"step": 2, "node": "风控策略Agent", "time": "2026-08-25 10:12:35", "event": "触发 R-101 规则，命中 2 次"},
+                                {"step": 3, "node": "router", "time": "2026-08-25 10:12:40", "event": "跨域转发至工业网关"},
+                                {"step": 4, "node": "edge-processor", "time": "2026-08-25 10:12:48", "event": "收到伪造 state_sync 指令"},
+                                {"step": 5, "node": "auditor", "time": "2026-08-25 10:13:05", "event": "记录审计日志，标记异常传播"}
+                            ],
+                            "evidence": [
+                                "token_validity SHAP 归因 −0.42",
+                                "跨域调用缺少二次鉴权",
+                                "state_sync 频率 17 次/分钟，基线 ≤2 次/分钟"
+                            ],
+                            "result": "已生成溯源报告并推送至审计看板"
+                        }
                     }
                 ]
             }

@@ -100,9 +100,17 @@ const MultiLineChart = ({ data }) => {
 // ---------------------------------------------------------------------------
 // 树节点（支持展开/折叠与操作按钮）
 // ---------------------------------------------------------------------------
-const DCTreeNode = ({ node, level = 0, onAction }) => {
+const DCTreeNode = ({ node, level = 0, onAction, onDetail }) => {
   const [open, setOpen] = useState(level < 1);
   const hasChildren = Array.isArray(node.children) && node.children.length > 0;
+  const handleBtnClick = (e) => {
+    e.stopPropagation();
+    if (node.detail && onDetail) {
+      onDetail(node);
+    } else {
+      onAction(node.button.text, node.name);
+    }
+  };
   return (
     <div className="dc-tree-node">
       <div className="dc-tree-row">
@@ -118,14 +126,14 @@ const DCTreeNode = ({ node, level = 0, onAction }) => {
         {node.button && (
           <button
             className="dc-tree-btn"
-            onClick={() => onAction(node.button.text, node.name)}
+            onClick={handleBtnClick}
           >{node.button.text}</button>
         )}
       </div>
       {hasChildren && open && (
         <div className="dc-tree-children">
           {node.children.map(c => (
-            <DCTreeNode key={c.id} node={c} level={level + 1} onAction={onAction} />
+            <DCTreeNode key={c.id} node={c} level={level + 1} onAction={onAction} onDetail={onDetail} />
           ))}
         </div>
       )}
@@ -250,6 +258,7 @@ const DetectionCenter = () => {
   const [formErrors, setFormErrors] = useState({});
   const [submitState, setSubmitState] = useState('idle');
   const [submitMsg, setSubmitMsg] = useState('');
+  const [detailModal, setDetailModal] = useState(null);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -434,6 +443,7 @@ const DetectionCenter = () => {
     const st = status[key];
     const treeData = data[key] && data[key].tree_data;
     const onAction = (action, name) => showToast(`已触发「${action}」：${name}`);
+    const onDetail = (node) => setDetailModal({ node });
     return (
       <div className="dc-panel">
         <h3>{title}</h3>
@@ -446,7 +456,7 @@ const DetectionCenter = () => {
         {st === 'ok' && (
           <div className="dc-tree">
             {(treeData || []).map(n => (
-              <DCTreeNode key={n.id} node={n} onAction={onAction} />
+              <DCTreeNode key={n.id} node={n} onAction={onAction} onDetail={onDetail} />
             ))}
           </div>
         )}
@@ -473,9 +483,117 @@ const DetectionCenter = () => {
     );
   };
 
+  const renderDetailModal = () => {
+    if (!detailModal) return null;
+    const { node } = detailModal;
+    const detail = node.detail || {};
+
+    const renderContent = () => {
+      if (detail.type === 'rule') {
+        return (
+          <>
+            <p className="dc-modal-summary">{detail.summary}</p>
+            <table className="dc-modal-table">
+              <thead>
+                <tr>
+                  <th>规则ID</th>
+                  <th>规则名称</th>
+                  <th>触发条件</th>
+                  <th>响应动作</th>
+                  <th>命中次数</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(detail.items || []).map((item, i) => (
+                  <tr key={i}>
+                    <td>{item.rule_id}</td>
+                    <td>{item.rule_name}</td>
+                    <td><code>{item.threshold}</code></td>
+                    <td>{item.action}</td>
+                    <td>{item.hits}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        );
+      }
+      if (detail.type === 'topology') {
+        return (
+          <>
+            <p className="dc-modal-summary">{detail.summary}</p>
+            <div className="dc-modal-grid">
+              <div>
+                <h4>节点</h4>
+                <ul className="dc-modal-list">
+                  {(detail.nodes || []).map((n, i) => (
+                    <li key={i}><strong>{n.name}</strong>（{n.layer}）</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h4>连接关系</h4>
+                <ul className="dc-modal-list">
+                  {(detail.edges || []).map((e, i) => (
+                    <li key={i} className={e.status}>
+                      {e.source} → {e.target}
+                      {e.status === 'anomaly' && <span className="dc-modal-tag alert">异常</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </>
+        );
+      }
+      if (detail.type === 'trace') {
+        return (
+          <>
+            <p className="dc-modal-summary">{detail.summary}</p>
+            <div className="dc-modal-timeline">
+              {(detail.path || []).map((step, i) => (
+                <div key={i} className="dc-modal-timeline-item">
+                  <div className="dc-modal-step">{step.step}</div>
+                  <div className="dc-modal-step-body">
+                    <div className="dc-modal-step-time">{step.time}</div>
+                    <div className="dc-modal-step-node">{step.node}</div>
+                    <div className="dc-modal-step-event">{step.event}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <h4>关键证据</h4>
+            <ul className="dc-modal-list">
+              {(detail.evidence || []).map((ev, i) => (
+                <li key={i}>{ev}</li>
+              ))}
+            </ul>
+            <p className="dc-modal-result">{detail.result}</p>
+          </>
+        );
+      }
+      return <pre className="dc-modal-json">{JSON.stringify(detail, null, 2)}</pre>;
+    };
+
+    return (
+      <div className="dc-modal-overlay" onClick={() => setDetailModal(null)}>
+        <div className="dc-modal" onClick={e => e.stopPropagation()}>
+          <div className="dc-modal-head">
+            <h3>{detail.title || `${node.name} 详情`}</h3>
+            <button className="dc-modal-close" onClick={() => setDetailModal(null)}>×</button>
+          </div>
+          <div className="dc-modal-body">
+            {renderContent()}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="dc-container">
       {toast && <div className="dc-toast">{toast}</div>}
+      {renderDetailModal()}
 
       <div className="dc-header">
         <h2>恶意行为实时检测中心</h2>
