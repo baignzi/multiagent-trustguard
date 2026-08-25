@@ -239,6 +239,23 @@ def get_calendar_events():
     return jsonify(fetch_calendar_events())
 
 
+# 检测策略下发（接收前端配置表单，返回确认回执）
+SUBMISSIONS = []
+
+
+@app.route('/api/v1/detection-config', methods=['POST'])
+def post_detection_config():
+    payload = request.get_json(silent=True) or {}
+    SUBMISSIONS.append(payload)
+    return jsonify({
+        "status": "accepted",
+        "message": "检测策略已下发至检测中心",
+        "config_id": f"DC-{len(SUBMISSIONS):04d}",
+        "received_at": datetime.now().isoformat(),
+        "items": payload,
+    })
+
+
 @app.route('/static/<path:path>')
 def serve_static(path):
     return send_from_directory('static', path)

@@ -6,12 +6,14 @@ import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 import 'katex/dist/katex.min.css';
 import './styles/index.css';
+import DetectionCenter from './components/DetectionCenter';
 
 const TABS = [
   { id: 'metadata', label: '元数据监控' },
   { id: 'graph', label: '交互图谱' },
   { id: 'policies', label: '策略编排' },
   { id: 'audit', label: '溯源看板' },
+  { id: 'detection', label: '检测中心' },
 ];
 
 const App = () => {
@@ -737,158 +739,164 @@ ${agentDetail.gnn_explanation}
         ))}
       </div>
 
-      <div className="layout">
-        <div className="panel left-panel">
-          <h2>智能体组织结构树</h2>
-          {treeLoading && <div className="placeholder">正在加载组织树...</div>}
-          {!treeLoading && treeError && (
-            <div className="error-box">
-              <p>{treeError}</p>
-              <button onClick={loadTree}>重新加载</button>
+      {activeTab === 'detection' ? (
+        <DetectionCenter />
+      ) : (
+        <>
+          <div className="layout">
+            <div className="panel left-panel">
+              <h2>智能体组织结构树</h2>
+              {treeLoading && <div className="placeholder">正在加载组织树...</div>}
+              {!treeLoading && treeError && (
+                <div className="error-box">
+                  <p>{treeError}</p>
+                  <button onClick={loadTree}>重新加载</button>
+                </div>
+              )}
+              {!treeLoading && !treeError && (
+                <div className="tree-container">{renderTree(treeData)}</div>
+              )}
+            </div>
+
+            <div className="panel right-panel">
+              {activeTab === 'metadata' && (
+                <>
+                  <h2>智能体元数据详情</h2>
+                  <div className="markdown-content">{renderMarkdownContent()}</div>
+                </>
+              )}
+              {activeTab === 'graph' && renderGraphView()}
+              {activeTab === 'policies' && renderPoliciesView()}
+              {activeTab === 'audit' && renderAuditView()}
+            </div>
+          </div>
+
+          {activeTab === 'metadata' && (
+            <div className="submodule">
+              <h2>元数据配置</h2>
+              <div className="chart-section">
+                <h3>分布式多智能体系统元数据监控仪表板</h3>
+                <div className="echarts-container">{renderChart()}</div>
+              </div>
+              <div className="form-section">
+                <h3>新智能体注册表单</h3>
+                <form onSubmit={handleRegisterSubmit} className="dynamic-form">
+                  <div className="form-row">
+                    <label>智能体ID *</label>
+                    <input
+                      type="text"
+                      value={registerForm.agent_id}
+                      onChange={e => setRegisterForm({...registerForm, agent_id: e.target.value})}
+                      required
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>智能体类型 *</label>
+                    <input
+                      type="text"
+                      value={registerForm.agent_type}
+                      onChange={e => setRegisterForm({...registerForm, agent_type: e.target.value})}
+                      required
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>行为语义标签</label>
+                    <input
+                      type="text"
+                      placeholder='["validator", "encrypted"]'
+                      value={JSON.stringify(registerForm.behavior_semantic_tags)}
+                      onChange={e => {
+                        try {
+                          setRegisterForm({...registerForm, behavior_semantic_tags: JSON.parse(e.target.value)});
+                        } catch {}
+                      }}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>通信上下文</label>
+                    <input
+                      type="text"
+                      value={registerForm.communication_context}
+                      onChange={e => setRegisterForm({...registerForm, communication_context: e.target.value})}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>图神经网络特征</label>
+                    <textarea
+                      rows="2"
+                      value={JSON.stringify(registerForm.gnn_features, null, 2)}
+                      onChange={e => {
+                        try {
+                          setRegisterForm({...registerForm, gnn_features: JSON.parse(e.target.value)});
+                        } catch {}
+                      }}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>节点拓扑关系</label>
+                    <input
+                      type="text"
+                      value={registerForm.node_topology_relations}
+                      onChange={e => setRegisterForm({...registerForm, node_topology_relations: e.target.value})}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>异常行为标记</label>
+                    <select
+                      value={registerForm.anomaly_behavior_flag}
+                      onChange={e => setRegisterForm({...registerForm, anomaly_behavior_flag: parseInt(e.target.value)})}
+                    >
+                      <option value={0}>正常</option>
+                      <option value={1}>轻度异常</option>
+                      <option value={2}>严重异常</option>
+                    </select>
+                  </div>
+                  <div className="form-row">
+                    <label>策略绑定</label>
+                    <input
+                      type="text"
+                      value={registerForm.policy_binding}
+                      onChange={e => setRegisterForm({...registerForm, policy_binding: e.target.value})}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>审计日志级别</label>
+                    <select
+                      value={registerForm.audit_log_level}
+                      onChange={e => setRegisterForm({...registerForm, audit_log_level: e.target.value})}
+                    >
+                      <option value="DEBUG">DEBUG</option>
+                      <option value="INFO">INFO</option>
+                      <option value="WARNING">WARNING</option>
+                      <option value="ERROR">ERROR</option>
+                    </select>
+                  </div>
+                  <div className="form-row">
+                    <label>数据版本</label>
+                    <input
+                      type="text"
+                      value={registerForm.data_version}
+                      onChange={e => setRegisterForm({...registerForm, data_version: e.target.value})}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <label>配置文件路径</label>
+                    <input
+                      type="text"
+                      value={registerForm.config_file}
+                      onChange={e => setRegisterForm({...registerForm, config_file: e.target.value})}
+                    />
+                  </div>
+                  <div className="form-actions">
+                    <button type="submit" disabled={isRegistering}>
+                      {isRegistering ? '注册中...' : '注册智能体'}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           )}
-          {!treeLoading && !treeError && (
-            <div className="tree-container">{renderTree(treeData)}</div>
-          )}
-        </div>
-
-        <div className="panel right-panel">
-          {activeTab === 'metadata' && (
-            <>
-              <h2>智能体元数据详情</h2>
-              <div className="markdown-content">{renderMarkdownContent()}</div>
-            </>
-          )}
-          {activeTab === 'graph' && renderGraphView()}
-          {activeTab === 'policies' && renderPoliciesView()}
-          {activeTab === 'audit' && renderAuditView()}
-        </div>
-      </div>
-
-      {activeTab === 'metadata' && (
-        <div className="submodule">
-          <h2>元数据配置</h2>
-          <div className="chart-section">
-            <h3>分布式多智能体系统元数据监控仪表板</h3>
-            <div className="echarts-container">{renderChart()}</div>
-          </div>
-          <div className="form-section">
-            <h3>新智能体注册表单</h3>
-            <form onSubmit={handleRegisterSubmit} className="dynamic-form">
-              <div className="form-row">
-                <label>智能体ID *</label>
-                <input
-                  type="text"
-                  value={registerForm.agent_id}
-                  onChange={e => setRegisterForm({...registerForm, agent_id: e.target.value})}
-                  required
-                />
-              </div>
-              <div className="form-row">
-                <label>智能体类型 *</label>
-                <input
-                  type="text"
-                  value={registerForm.agent_type}
-                  onChange={e => setRegisterForm({...registerForm, agent_type: e.target.value})}
-                  required
-                />
-              </div>
-              <div className="form-row">
-                <label>行为语义标签</label>
-                <input
-                  type="text"
-                  placeholder='["validator", "encrypted"]'
-                  value={JSON.stringify(registerForm.behavior_semantic_tags)}
-                  onChange={e => {
-                    try {
-                      setRegisterForm({...registerForm, behavior_semantic_tags: JSON.parse(e.target.value)});
-                    } catch {}
-                  }}
-                />
-              </div>
-              <div className="form-row">
-                <label>通信上下文</label>
-                <input
-                  type="text"
-                  value={registerForm.communication_context}
-                  onChange={e => setRegisterForm({...registerForm, communication_context: e.target.value})}
-                />
-              </div>
-              <div className="form-row">
-                <label>图神经网络特征</label>
-                <textarea
-                  rows="2"
-                  value={JSON.stringify(registerForm.gnn_features, null, 2)}
-                  onChange={e => {
-                    try {
-                      setRegisterForm({...registerForm, gnn_features: JSON.parse(e.target.value)});
-                    } catch {}
-                  }}
-                />
-              </div>
-              <div className="form-row">
-                <label>节点拓扑关系</label>
-                <input
-                  type="text"
-                  value={registerForm.node_topology_relations}
-                  onChange={e => setRegisterForm({...registerForm, node_topology_relations: e.target.value})}
-                />
-              </div>
-              <div className="form-row">
-                <label>异常行为标记</label>
-                <select
-                  value={registerForm.anomaly_behavior_flag}
-                  onChange={e => setRegisterForm({...registerForm, anomaly_behavior_flag: parseInt(e.target.value)})}
-                >
-                  <option value={0}>正常</option>
-                  <option value={1}>轻度异常</option>
-                  <option value={2}>严重异常</option>
-                </select>
-              </div>
-              <div className="form-row">
-                <label>策略绑定</label>
-                <input
-                  type="text"
-                  value={registerForm.policy_binding}
-                  onChange={e => setRegisterForm({...registerForm, policy_binding: e.target.value})}
-                />
-              </div>
-              <div className="form-row">
-                <label>审计日志级别</label>
-                <select
-                  value={registerForm.audit_log_level}
-                  onChange={e => setRegisterForm({...registerForm, audit_log_level: e.target.value})}
-                >
-                  <option value="DEBUG">DEBUG</option>
-                  <option value="INFO">INFO</option>
-                  <option value="WARNING">WARNING</option>
-                  <option value="ERROR">ERROR</option>
-                </select>
-              </div>
-              <div className="form-row">
-                <label>数据版本</label>
-                <input
-                  type="text"
-                  value={registerForm.data_version}
-                  onChange={e => setRegisterForm({...registerForm, data_version: e.target.value})}
-                />
-              </div>
-              <div className="form-row">
-                <label>配置文件路径</label>
-                <input
-                  type="text"
-                  value={registerForm.config_file}
-                  onChange={e => setRegisterForm({...registerForm, config_file: e.target.value})}
-                />
-              </div>
-              <div className="form-actions">
-                <button type="submit" disabled={isRegistering}>
-                  {isRegistering ? '注册中...' : '注册智能体'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </>
       )}
     </div>
   );
